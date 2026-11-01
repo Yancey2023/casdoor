@@ -488,7 +488,7 @@ func GetImplicitToken(application *Application, username string, password string
 		return nil, tokenError, nil
 	}
 
-	return mintTokenForUser(application, user, scope, nonce, host)
+	return mintTokenForUser(application, user, scope, nonce, "", host)
 }
 
 func checkGrantUserSignin(application *Application, user *User, clientIp string, lang string) *TokenError {
@@ -558,7 +558,7 @@ func GetJwtBearerToken(application *Application, assertion string, scope string,
 		if tokenError = checkGrantUserSignin(application, user, clientIp, lang); tokenError != nil {
 			return nil, tokenError, nil
 		}
-		return mintTokenForUser(application, user, scope, nonce, host)
+		return mintTokenForUser(application, user, scope, nonce, "", host)
 	}
 
 	ok, claims, err := ValidateJwtAssertion(assertion, application, host)

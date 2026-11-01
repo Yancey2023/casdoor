@@ -41,8 +41,10 @@ func TestDeviceAuthorizationTokenResource(t *testing.T) {
 	if _, err = adapter.Engine.Insert(cert, user); err != nil {
 		t.Fatal(err)
 	}
-	application := &Application{Owner: "admin", Name: "device-app", Organization: user.Owner,
-		ClientId: "device-client", Cert: cert.Name, TokenFormat: "JWT", ExpireInHours: 1, RefreshExpireInHours: 2}
+	application := &Application{
+		Owner: "admin", Name: "device-app", Organization: user.Owner,
+		ClientId: "device-client", Cert: cert.Name, TokenFormat: "JWT", ExpireInHours: 1, RefreshExpireInHours: 2,
+	}
 	for _, resource := range []string{"https://api.example.com/drive", ""} {
 		t.Run(resource, func(t *testing.T) {
 			token, tokenErr, err := GetDeviceCodeToken(application, user.GetId(), "openid profile", "device-nonce", resource, "localhost:8000")
