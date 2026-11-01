@@ -35,6 +35,7 @@ type deviceAuthStore interface {
 	Store(key, value any)
 	Delete(key any)
 	LoadAndDelete(key any) (any, bool)
+	CompareAndSwap(key string, old, new DeviceAuthCache) bool
 	Range(f func(key, value any) bool)
 }
 
@@ -100,6 +101,12 @@ func (s *memoryDeviceAuthStore) Store(key, value any)              { s.m.Store(k
 func (s *memoryDeviceAuthStore) Delete(key any)                    { s.m.Delete(key) }
 func (s *memoryDeviceAuthStore) LoadAndDelete(key any) (any, bool) { return s.m.LoadAndDelete(key) }
 func (s *memoryDeviceAuthStore) Range(f func(key, value any) bool) { s.m.Range(f) }
+
+// CompareAndSwap preserves the existing entry's expiry and never recreates a
+// deleted grant. DeviceAuthCache contains only comparable fields.
+func (s *memoryDeviceAuthStore) CompareAndSwap(key string, old, new DeviceAuthCache) bool {
+	return s.m.CompareAndSwap(key, old, new)
+}
 
 // ── Redis implementation ─────────────────────────────────────────────────────
 
@@ -183,6 +190,29 @@ func (s *redisDeviceAuthStore) LoadAndDelete(key any) (any, bool) {
 		return nil, false
 	}
 	return cache, true
+}
+
+// CompareAndSwap performs the state transition in Redis so that different
+// Casdoor replicas cannot redeem the same approval. KEEPTTL retains the original
+// deadline; SET must not resurrect a missing or expired grant.
+func (s *redisDeviceAuthStore) CompareAndSwap(key string, old, new DeviceAuthCache) bool {
+	before, err := json.Marshal(old)
+	if err != nil {
+		return false
+	}
+	after, err := json.Marshal(new)
+	if err != nil {
+		return false
+	}
+	const script = `
+if redis.call("GET", KEYS[1]) ~= ARGV[1] then
+    return 0
+end
+redis.call("SET", KEYS[1], ARGV[2], "KEEPTTL")
+return 1
+`
+	result, err := s.client.Eval(context.Background(), script, []string{deviceAuthRedisPrefix + key}, before, after).Int()
+	return err == nil && result == 1
 }
 
 // Range is a no-op for the Redis backend: entries expire automatically via TTL,

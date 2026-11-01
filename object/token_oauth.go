@@ -100,7 +100,7 @@ func GetOAuthToken(grantType string, clientId string, clientSecret string, code 
 	case "urn:ietf:params:oauth:grant-type:device_code":
 		// The user has already authenticated via browser in the device flow,
 		// so we skip password verification and mint a token directly.
-		token, tokenError, err = GetDeviceCodeToken(application, username, scope, nonce, host)
+		token, tokenError, err = GetDeviceCodeToken(application, username, scope, nonce, resource, host)
 	case "urn:ietf:params:oauth:grant-type:token-exchange": // Token Exchange Grant (RFC 8693)
 		if requestedTokenType == IdJagTokenType {
 			idJag, tokenError, err := GetIdJagToken(application, clientSecret, subjectToken, subjectTokenType, audience, resource, scope, host)
@@ -589,13 +589,17 @@ func GetTokenByUser(application *Application, user *User, scope string, nonce st
 // authTime is when the user entered credentials, withAtHash is set when the access token is
 // returned together with the ID token
 func GetTokenByUserWithAuth(application *Application, user *User, scope string, nonce string, sessionId string, host string, authTime int64, withAtHash bool) (*Token, error) {
+	return getTokenByUserWithResource(application, user, scope, nonce, sessionId, "", host, authTime, withAtHash)
+}
+
+func getTokenByUserWithResource(application *Application, user *User, scope string, nonce string, sessionId string, resource string, host string, authTime int64, withAtHash bool) (*Token, error) {
 	err := ExtendUserWithRolesAndPermissions(user)
 	if err != nil {
 		return nil, err
 	}
 
 	options := jwtTokenOptions{AuthTime: authTime, WithAtHash: withAtHash}
-	accessToken, refreshToken, idToken, tokenName, err := generateJwtTokenWithOptions(application, user, "", "", nonce, scope, "", host, options)
+	accessToken, refreshToken, idToken, tokenName, err := generateJwtTokenWithOptions(application, user, "", "", nonce, scope, resource, host, options)
 	if err != nil {
 		return nil, err
 	}
@@ -616,6 +620,7 @@ func GetTokenByUserWithAuth(application *Application, user *User, scope string, 
 		TokenType:    "Bearer",
 		CodeIsUsed:   true,
 		SessionId:    sessionId,
+		Resource:     resource,
 	}
 	_, err = AddToken(token)
 	if err != nil {

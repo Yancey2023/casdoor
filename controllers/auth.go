@@ -1844,11 +1844,17 @@ func (c *ApiController) Callback() {
 // @Description Endpoint for the device authorization flow
 // @Param   client_id query string true  "The OAuth2 client ID"
 // @Param   scope     query string false "The requested scope"
+// @Param   resource  query string false "The target resource URI (RFC 8707)"
 // @router /device-auth [post]
 // @Success 200 {object} object.DeviceAuthResponse The Response object
 func (c *ApiController) DeviceAuth() {
 	clientId := c.Ctx.Input.Query("client_id")
 	scope := c.Ctx.Input.Query("scope")
+	resource := c.Ctx.Input.Query("resource")
+	if err := object.ValidateDeviceAuthResourceURI(resource); err != nil {
+		c.responseDeviceAuthError(object.InvalidTarget, err.Error())
+		return
+	}
 	if clientId == "" {
 		c.responseDeviceAuthError(object.InvalidRequest, "missing client_id")
 		return
@@ -1897,6 +1903,7 @@ func (c *ApiController) DeviceAuth() {
 		Scope:         scope,
 		ApplicationId: application.GetId(),
 		ClientId:      application.ClientId,
+		Resource:      resource,
 		RequestAt:     time.Now(),
 		Status:        object.DeviceAuthStatusPending,
 		ExpiresIn:     expiresIn,
@@ -1910,6 +1917,7 @@ func (c *ApiController) DeviceAuth() {
 		RequestAt:     time.Now(),
 		Status:        object.DeviceAuthStatusPending,
 		CancelToken:   cancelToken,
+		Resource:      resource,
 		ExpiresIn:     expiresIn,
 	}
 

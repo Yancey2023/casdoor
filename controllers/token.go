@@ -332,79 +332,27 @@ func (c *ApiController) GetOAuthToken() {
 	var pendingDeviceCode string
 	var pendingDeviceAuthCache object.DeviceAuthCache
 
-	if deviceCode != "" {
-		deviceAuthCache, ok := object.DeviceAuthMap.Load(deviceCode)
-		if !ok {
-			c.Data["json"] = &object.TokenError{
-				Error:            "expired_token",
-				ErrorDescription: "token is expired",
-			}
+	if grantType == "urn:ietf:params:oauth:grant-type:device_code" {
+		if deviceCode == "" {
+			c.Data["json"] = &object.TokenError{Error: object.InvalidRequest, ErrorDescription: "device_code parameter is required for this grant type"}
 			c.SetTokenErrorHttpStatus()
 			c.ServeJSON()
 			return
 		}
-
-		deviceAuthCacheCast := deviceAuthCache.(object.DeviceAuthCache)
-
-		if deviceAuthCacheCast.IsExpired() {
-			object.DeviceAuthMap.Delete(deviceCode)
-			c.Data["json"] = &object.TokenError{
-				Error:            "expired_token",
-				ErrorDescription: "token is expired",
-			}
+		claimed, tokenError := object.ClaimDeviceAuthorization(deviceCode, clientId, resource)
+		if tokenError != nil {
+			c.Data["json"] = tokenError
 			c.SetTokenErrorHttpStatus()
 			c.ServeJSON()
 			return
 		}
-
-		if deviceAuthCacheCast.Status == object.DeviceAuthStatusDenied {
-			c.Data["json"] = &object.TokenError{
-				Error:            "access_denied",
-				ErrorDescription: "device login was denied",
-			}
-			c.SetTokenErrorHttpStatus()
-			c.ServeJSON()
-			return
-		}
-
-		if deviceAuthCacheCast.Status == object.DeviceAuthStatusTokenIssued {
-			c.Data["json"] = &object.TokenError{
-				Error:            "access_denied",
-				ErrorDescription: "device_code has already been used",
-			}
-			c.SetTokenErrorHttpStatus()
-			c.ServeJSON()
-			return
-		}
-
-		if !deviceAuthCacheCast.UserSignIn {
-			c.Data["json"] = &object.TokenError{
-				Error:            "authorization_pending",
-				ErrorDescription: "authorization pending",
-			}
-			c.SetTokenErrorHttpStatus()
-			c.ServeJSON()
-			return
-		}
-		// Bind client_id to the application from the original device auth request.
-		if deviceAuthCacheCast.ClientId != "" && deviceAuthCacheCast.ClientId != clientId {
-			c.Data["json"] = &object.TokenError{
-				Error:            object.InvalidClient,
-				ErrorDescription: "client_id does not match the device authorization request",
-			}
-			c.SetTokenErrorHttpStatus()
-			c.ServeJSON()
-			return
-		}
-		username = deviceAuthCacheCast.UserName
-		scope = deviceAuthCacheCast.Scope
+		username = claimed.UserName
+		scope = claimed.Scope
+		resource = claimed.Resource
 		pendingDeviceCode = deviceCode
-		pendingDeviceAuthCache = deviceAuthCacheCast
-	} else if grantType == "urn:ietf:params:oauth:grant-type:device_code" {
-		c.Data["json"] = &object.TokenError{
-			Error:            "invalid_request",
-			ErrorDescription: "device_code parameter is required for this grant type",
-		}
+		pendingDeviceAuthCache = *claimed
+	} else if deviceCode != "" {
+		c.Data["json"] = &object.TokenError{Error: object.InvalidRequest, ErrorDescription: "device_code requires the device authorization grant type"}
 		c.SetTokenErrorHttpStatus()
 		c.ServeJSON()
 		return
@@ -418,8 +366,14 @@ func (c *ApiController) GetOAuthToken() {
 
 	if pendingDeviceCode != "" {
 		if _, isTokenError := token.(*object.TokenError); !isTokenError {
-			pendingDeviceAuthCache.Status = object.DeviceAuthStatusTokenIssued
-			object.DeviceAuthMap.Store(pendingDeviceCode, pendingDeviceAuthCache)
+			issued := pendingDeviceAuthCache
+			issued.Status = object.DeviceAuthStatusTokenIssued
+			if !object.DeviceAuthMap.CompareAndSwap(pendingDeviceCode, pendingDeviceAuthCache, issued) {
+				c.Data["json"] = &object.TokenError{Error: object.InvalidGrant, ErrorDescription: "device authorization is no longer valid"}
+				c.SetTokenErrorHttpStatus()
+				c.ServeJSON()
+				return
+			}
 		}
 	}
 

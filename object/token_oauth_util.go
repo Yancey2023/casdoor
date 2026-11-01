@@ -44,10 +44,11 @@ const (
 	DeviceAuthExpiresIn  = 120
 	DeviceAuthInterval   = 5
 
-	DeviceAuthStatusPending     = "pending"
-	DeviceAuthStatusApproved    = "approved"
-	DeviceAuthStatusDenied      = "denied"
-	DeviceAuthStatusTokenIssued = "token_issued"
+	DeviceAuthStatusPending      = "pending"
+	DeviceAuthStatusApproved     = "approved"
+	DeviceAuthStatusDenied       = "denied"
+	DeviceAuthStatusTokenIssuing = "token_issuing"
+	DeviceAuthStatusTokenIssued  = "token_issued"
 )
 
 // DeviceAuthMap stores the transient state of the OAuth 2.0 Device Authorization Grant (RFC 8628).
@@ -186,6 +187,7 @@ type DeviceAuthCache struct {
 	Status        string
 	CancelToken   string
 	ExpiresIn     int
+	Resource      string
 }
 
 func (cache DeviceAuthCache) GetExpiresIn() int {
@@ -241,6 +243,57 @@ func validateResourceURI(resource string) error {
 	}
 
 	return nil
+}
+
+// ValidateDeviceAuthResourceURI validates the optional resource indicator at the
+// device authorization endpoint. RFC 8707 forbids fragment components, including
+// an empty fragment, but allows query components and non-HTTP absolute URIs.
+func ValidateDeviceAuthResourceURI(resource string) error {
+	if err := validateResourceURI(resource); err != nil {
+		return err
+	}
+	if strings.Contains(resource, "#") {
+		return fmt.Errorf("resource must not contain a fragment")
+	}
+	return nil
+}
+
+// ClaimDeviceAuthorization validates the original grant and atomically consumes
+// its approval before minting tokens. A failed or interrupted mint must not make
+// the same device code redeemable again.
+func ClaimDeviceAuthorization(deviceCode, clientId, resource string) (*DeviceAuthCache, *TokenError) {
+	value, ok := DeviceAuthMap.Load(deviceCode)
+	if !ok {
+		return nil, &TokenError{Error: "expired_token", ErrorDescription: "token is expired"}
+	}
+	cache := value.(DeviceAuthCache)
+	if cache.IsExpired() {
+		DeviceAuthMap.Delete(deviceCode)
+		return nil, &TokenError{Error: "expired_token", ErrorDescription: "token is expired"}
+	}
+	if cache.ClientId != "" && cache.ClientId != clientId {
+		return nil, &TokenError{Error: InvalidClient, ErrorDescription: "client_id does not match the device authorization request"}
+	}
+	// As with refresh, omission retains the original resource. A token poll may
+	// neither replace the authorized resource nor add one to an unbound grant.
+	if resource != "" && resource != cache.Resource {
+		return nil, &TokenError{Error: InvalidTarget, ErrorDescription: "resource does not match the device authorization request"}
+	}
+	if cache.Status == DeviceAuthStatusDenied {
+		return nil, &TokenError{Error: "access_denied", ErrorDescription: "device login was denied"}
+	}
+	if cache.Status == DeviceAuthStatusTokenIssuing || cache.Status == DeviceAuthStatusTokenIssued {
+		return nil, &TokenError{Error: "access_denied", ErrorDescription: "device_code has already been used"}
+	}
+	if cache.Status != DeviceAuthStatusApproved || !cache.UserSignIn {
+		return nil, &TokenError{Error: "authorization_pending", ErrorDescription: "authorization pending"}
+	}
+	claimed := cache
+	claimed.Status = DeviceAuthStatusTokenIssuing
+	if !DeviceAuthMap.CompareAndSwap(deviceCode, cache, claimed) {
+		return nil, &TokenError{Error: InvalidGrant, ErrorDescription: "device_code has already been used or is no longer valid"}
+	}
+	return &claimed, nil
 }
 
 // pkceChallenge returns the base64-URL-encoded SHA256 hash of verifier, per RFC 7636
@@ -867,20 +920,20 @@ func mintImplicitToken(application *Application, username string, scope string, 
 			return nil, tokenError, nil
 		}
 	}
-	return mintTokenForUser(application, user, scope, nonce, host)
+	return mintTokenForUser(application, user, scope, nonce, "", host)
 }
 
 // GetDeviceCodeToken takes the full user ID recorded by the browser approval: looking a bare name
 // up again in the application's organization may resolve to another organization's namesake.
-func GetDeviceCodeToken(application *Application, userId string, scope string, nonce string, host string) (*Token, *TokenError, error) {
+func GetDeviceCodeToken(application *Application, userId string, scope string, nonce string, resource string, host string) (*Token, *TokenError, error) {
 	user, err := GetUser(userId)
 	if err != nil {
 		return nil, nil, err
 	}
-	return mintTokenForUser(application, user, scope, nonce, host)
+	return mintTokenForUser(application, user, scope, nonce, resource, host)
 }
 
-func mintTokenForUser(application *Application, user *User, scope string, nonce string, host string) (*Token, *TokenError, error) {
+func mintTokenForUser(application *Application, user *User, scope string, nonce string, resource string, host string) (*Token, *TokenError, error) {
 	expandedScope, ok := IsScopeValidAndExpand(scope, application)
 	if !ok {
 		return nil, &TokenError{
@@ -903,7 +956,7 @@ func mintTokenForUser(application *Application, user *User, scope string, nonce 
 		}, nil
 	}
 
-	token, err := GetTokenByUser(application, user, scope, nonce, "", host)
+	token, err := getTokenByUserWithResource(application, user, scope, nonce, "", resource, host, 0, false)
 	if err != nil {
 		return nil, nil, err
 	}
