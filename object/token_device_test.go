@@ -29,7 +29,7 @@ func TestDeviceAuthorizationTokenResource(t *testing.T) {
 	}
 	ormer = adapter
 	t.Cleanup(func() { ormer = previous; _ = adapter.Engine.Close() })
-	if err = adapter.Engine.Sync2(new(User), new(Role), new(Permission), new(Cert), new(Token)); err != nil {
+	if err = adapter.Engine.Sync2(new(User), new(ThirdPartyLink), new(Role), new(Permission), new(Cert), new(Token)); err != nil {
 		t.Fatal(err)
 	}
 	certificate, privateKey, err := generateRsaKeys(2048, 256, 1, "Device test", "Device test")
