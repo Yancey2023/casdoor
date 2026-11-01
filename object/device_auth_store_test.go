@@ -30,10 +30,14 @@ func TestDeviceAuthorizationResourceURI(t *testing.T) {
 		resource string
 		valid    bool
 	}{
-		{"", true}, {"https://api.example.com/drive", true},
-		{"https://api.example.com/drive?region=eu", true}, {"urn:example:drive", true},
-		{"https://api.example.com/%23drive", true}, {"/drive", false},
-		{"https://api.example.com/#drive", false}, {"https://api.example.com/#", false},
+		{"", true},
+		{"https://api.example.com/drive", true},
+		{"https://api.example.com/drive?region=eu", true},
+		{"urn:example:drive", true},
+		{"https://api.example.com/%23drive", true},
+		{"/drive", false},
+		{"https://api.example.com/#drive", false},
+		{"https://api.example.com/#", false},
 		{"https://api.example.com/%zz", false},
 	} {
 		t.Run(tc.resource, func(t *testing.T) {
